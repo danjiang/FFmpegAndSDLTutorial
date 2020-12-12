@@ -1,33 +1,17 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
-
-void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame) {
-  FILE *pFile;
-  char szFilename[32];
-  int y;
-
-  // Open file
-  sprintf(szFilename, "Frame%d.ppm", iFrame);
-  pFile = fopen(szFilename, "wb");
-  if (pFile == NULL) {
-    return;
-  }
-
-  // Write header
-  fprintf(pFile, "P6\n%d %d\n255\n", width, height);
-
-  // Write pixel data
-  for (int y = 0; y < height; ++y) {
-    fwrite(pFrame->data[0] + y * pFrame->linesize[0], 1, width * 3, pFile);
-  }
-
-  // Close file
-  fclose(pFile);
-}
+#include <SDL2/SDL.h>
+#undef main
 
 int main(int argc, char *argv[]) {
   av_register_all();
+
+  // Initialize SDL
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER)) {
+    fprintf(stderr, "Could not initialize SDL - %s\n", SDL_GetError());
+    exit(1);
+  }
 
   AVFormatContext *pFormatCtx = NULL;
 
@@ -50,7 +34,7 @@ int main(int argc, char *argv[]) {
 
   // Find the first video stream
   int videoStream = -1;
-  for (int i = 0; i < pFormatCtx->nb_streams; ++i) {
+  for (i = 0; i < pFormatCtx->nb_streams; ++i) {
     if (pFormatCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
       videoStream = i;
       break;
@@ -85,41 +69,39 @@ int main(int argc, char *argv[]) {
   }
 
   AVFrame *pFrame = NULL;
-  AVFrame *pFrameRGB = NULL;
 
   // Allocate video frame
   pFrame = av_frame_alloc();
 
-  // Allocate an AVFrame structure
-  pFrameRGB = av_frame_alloc();
-  if (pFrameRGB == NULL) {
-    return -1;
+  SDL_Window *window;
+  window = SDL_CreateWindow("Media Player",
+                            SDL_WINDOWPOS_UNDEFINED,
+                            SDL_WINDOWPOS_UNDEFINED,
+                            pCodecCtx->width,
+                            pCodecCtx->height,
+                            SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+  if (!window) {
+    fprintf(stderr, "SDL: could not create window by SDL - exiting\n");
   }
 
-  uint8_t *buffer = NULL;
-  int numBytes;
-  numBytes = avpicture_get_size(AV_PIX_FMT_RGB24, pCodecCtx->width, pCodecCtx->height);
-  buffer = (uint8_t *)av_malloc(numBytes * sizeof(uint8_t));
+  SDL_Renderer *renderer;
+  renderer = SDL_CreateRenderer(window, -1, 0);
+  if (!renderer) {
+    fprintf(stderr, "SDL: could not create Renderer by SDL - exiting\n");
+  }
 
-  // Assign appropriate parts of buffer to image planes in pFrameRGB
-  // Note that pFrameRGB is an AVFrame, but AVFrame is a superset of AVPicture
-  avpicture_fill((struct AVPicture *)pFrameRGB, buffer, AV_PIX_FMT_RGB24, pCodecCtx->width, pCodecCtx->height);
+  SDL_Texture *texture;
+  texture = SDL_CreateTexture(renderer,
+                              SDL_PIXELFORMAT_IYUV,
+                              SDL_TEXTUREACCESS_STREAMING,
+                              pCodecCtx->width,
+                              pCodecCtx->height);
 
-  struct SwsContext *sws_ctx = NULL;
   int frameFinished;
   AVPacket packet;
-  // initialize SWS context for software scaling
-  sws_ctx = sws_getContext(pCodecCtx->width,
-                           pCodecCtx->height,
-                           pCodecCtx->pix_fmt,
-                           pCodecCtx->width,
-                           pCodecCtx->height,
-                           AV_PIX_FMT_RGB24,
-                           SWS_BILINEAR,
-                           NULL,
-                           NULL,
-                           NULL);
   i = 0;
+  SDL_Rect rect;
+  SDL_Event event;
   while (av_read_frame(pFormatCtx, &packet) >= 0) {
     // Is this a packet from the video stream?
     if (packet.stream_index == videoStream) {
@@ -128,24 +110,35 @@ int main(int argc, char *argv[]) {
 
       // Did we get a video frame?
       if (frameFinished) {
-        // Convert the image from its native format to RGB
-        sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data,
-                  pFrame->linesize, 0, pCodecCtx->height,
-                  pFrameRGB->data, pFrameRGB->linesize);
-        // Save the frame to disk
-        if (++i <= 5) {
-          SaveFrame(pFrameRGB, pCodecCtx->width, pCodecCtx->height, i);
-        }
+        SDL_UpdateYUVTexture(texture, NULL,
+                             pFrame->data[0], pFrame->linesize[0],
+                             pFrame->data[1], pFrame->linesize[1],
+                             pFrame->data[2], pFrame->linesize[2]);
+
+        rect.x = 0;
+        rect.y = 0;
+        rect.w = pCodecCtx->width;
+        rect.h = pCodecCtx->height;
+
+        SDL_RenderClear(renderer);
+        SDL_RenderCopy(renderer, texture, NULL, &rect);
+        SDL_RenderPresent(renderer);
       }
+    }
+
+    av_free_packet(&packet);
+    SDL_PollEvent(&event);
+    switch(event.type) {
+      case SDL_QUIT:
+        SDL_Quit();
+        exit(0);
+      default:
+        break;
     }
   }
 
   // Free the packet that was allocated by av_read_frame
   av_free_packet(&packet);
-
-  // Free the RGB image
-  av_free(buffer);
-  av_free(pFrameRGB);
 
   // Free the YUV frame
   av_free(pFrame);
