@@ -4,6 +4,7 @@
 #include <libavutil/avstring.h>
 #include <SDL2/SDL.h>
 #include <libavutil/time.h>
+#include <assert.h>
 #undef main
 
 #define SDL_AUDIO_BUFFER_SIZE 1024
@@ -206,7 +207,7 @@ int audio_decode_frame(VideoState *is, uint8_t *audio_buf, int buf_size, double 
                                                is->audio_frame.nb_samples,
                                                is->audio_ctx->sample_fmt,
                                                1);
-//        assert(data_size <= buf_size);
+        assert(data_size <= buf_size);
         memcpy(audio_buf, is->audio_frame.data[0], data_size);
       }
       if(data_size <= 0) {
@@ -401,7 +402,11 @@ int stream_component_open(VideoState *is, int stream_index) {
   if(codecCtx->codec_type == AVMEDIA_TYPE_AUDIO) {
     // Set audio settings from codec info
     wanted_spec.freq = codecCtx->sample_rate;
-    wanted_spec.format = AUDIO_F32SYS;
+    // codec->sample_fmts = AV_SAMPLE_FMT_FLTP
+    // no same format in SDL
+    // should use libswresample to convert fltp to s16
+    // but not figure out how to do this
+    wanted_spec.format = AUDIO_S16SYS;
     wanted_spec.channels = codecCtx->channels;
     wanted_spec.silence = 0;
     wanted_spec.samples = SDL_AUDIO_BUFFER_SIZE;
